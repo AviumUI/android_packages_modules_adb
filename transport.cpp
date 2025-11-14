@@ -103,6 +103,7 @@ const char* const kFeatureDeviceTrackerProtoFormat = "devicetracker_proto_format
 const char* const kFeatureDevRaw = "devraw";
 const char* const kFeatureAppInfo = "app_info";  // Add information to track-app (package name, ...)
 const char* const kFeatureServerStatus = "server_status";  // Ability to output server status
+const char* const kFeatureTrackMdns = "track_mdns";        // Track and stream mdns services.
 
 namespace {
 
@@ -299,7 +300,7 @@ BlockingConnectionAdapter::BlockingConnectionAdapter(std::unique_ptr<BlockingCon
     : underlying_(std::move(connection)) {}
 
 BlockingConnectionAdapter::~BlockingConnectionAdapter() {
-    LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): destructing";
+    VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): destructing";
     Stop();
 }
 
@@ -312,7 +313,7 @@ bool BlockingConnectionAdapter::Start() {
     StartReadThread();
 
     write_thread_ = std::thread([this]() {
-        LOG(INFO) << Serial() << ": write thread spawning";
+        VLOG(ADB) << Serial() << ": write thread spawning";
         while (true) {
             std::unique_lock<std::mutex> lock(mutex_);
             ScopedLockAssertion assume_locked(mutex_);
@@ -341,11 +342,11 @@ bool BlockingConnectionAdapter::Start() {
 
 void BlockingConnectionAdapter::StartReadThread() {
     read_thread_ = std::thread([this]() {
-        LOG(INFO) << Serial() << ": read thread spawning";
+        VLOG(ADB) << Serial() << ": read thread spawning";
         while (true) {
             auto packet = std::make_unique<apacket>();
             if (!underlying_->Read(packet.get())) {
-                PLOG(INFO) << Serial() << ": read failed";
+                VLOG(ADB) << Serial() << ": read failed";
                 break;
             }
 
@@ -360,7 +361,7 @@ void BlockingConnectionAdapter::StartReadThread() {
             // handshake. So this read thread must stop and resume after the
             // handshake completes otherwise this will interfere in the process.
             if (got_stls_cmd) {
-                LOG(INFO) << Serial() << ": Received STLS packet. Stopping read thread.";
+                VLOG(ADB) << Serial() << ": Received STLS packet. Stopping read thread.";
                 return;
             }
         }
@@ -382,17 +383,17 @@ void BlockingConnectionAdapter::Reset() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!started_) {
-            LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): not started";
+            VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): not started";
             return;
         }
 
         if (stopped_) {
-            LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): already stopped";
+            VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): already stopped";
             return;
         }
     }
 
-    LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): resetting";
+    VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): resetting";
     this->underlying_->Reset();
     Stop();
 }
@@ -401,19 +402,19 @@ void BlockingConnectionAdapter::Stop() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!started_) {
-            LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): not started";
+            VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): not started";
             return;
         }
 
         if (stopped_) {
-            LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): already stopped";
+            VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): already stopped";
             return;
         }
 
         stopped_ = true;
     }
 
-    LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): stopping";
+    VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): stopping";
 
     this->underlying_->Close();
     this->cv_.notify_one();
@@ -431,7 +432,7 @@ void BlockingConnectionAdapter::Stop() {
     read_thread.join();
     write_thread.join();
 
-    LOG(INFO) << "BlockingConnectionAdapter(" << Serial() << "): stopped";
+    VLOG(ADB) << "BlockingConnectionAdapter(" << Serial() << "): stopped";
     std::call_once(this->error_flag_, [this]() { transport_->HandleError("requested stop"); });
 }
 
@@ -562,6 +563,10 @@ void FdConnection::Close() {
 }
 
 void send_packet(apacket* p, atransport* t) {
+    VLOG(PACKETS) << std::format("packet --> {}{}{}{}", ((char*)(&(p->msg.command)))[0],
+                                 ((char*)(&(p->msg.command)))[1], ((char*)(&(p->msg.command)))[2],
+                                 ((char*)(&(p->msg.command)))[3]);
+
     p->msg.magic = p->msg.command ^ 0xffffffff;
     // compute a checksum for connection/auth packets for compatibility reasons
     if (t->get_protocol_version() >= A_VERSION_SKIP_CHECKSUM) {
@@ -740,6 +745,7 @@ static void fdevent_unregister_transport(atransport* t) {
         pending_list.remove(t);
     }
 
+    t->connection()->SetTransport(nullptr);
     delete t;
 
     update_transports();
@@ -1224,6 +1230,7 @@ const FeatureSet& supported_features() {
             kFeatureDevRaw,
             kFeatureAppInfo,
             kFeatureServerStatus,
+            kFeatureTrackMdns,
         };
         // clang-format on
 
@@ -1502,6 +1509,12 @@ bool validate_transport_list(const std::list<atransport*>& list, const std::stri
 
 bool register_socket_transport(unique_fd s, std::string serial, int port, bool is_emulator,
                                atransport::ReconnectCallback reconnect, bool use_tls, int* error) {
+#if ADB_HOST
+    // Below in this method, we block up to 10s on the waitable. This should never run on the
+    // fdevent thread.
+    fdevent_check_not_looper();
+#endif
+
     atransport* t = new atransport(kTransportLocal, std::move(reconnect), kCsOffline);
     t->use_tls = use_tls;
     t->serial = std::move(serial);
@@ -1717,7 +1730,7 @@ std::shared_ptr<RSA> atransport::Key() {
 
 std::shared_ptr<RSA> atransport::NextKey() {
     if (keys_.empty()) {
-        LOG(INFO) << "fetching keys for transport " << this->serial_name();
+        VLOG(ADB) << "fetching keys for transport " << this->serial_name();
         keys_ = adb_auth_get_private_keys();
 
         // We should have gotten at least one key: the one that's automatically generated.

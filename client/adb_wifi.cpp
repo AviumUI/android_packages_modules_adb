@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "adb_wifi.h"
+#include "client/adb_wifi.h"
 
 #include <fstream>
 #include <random>
@@ -94,7 +94,7 @@ bool SafeReplaceFile(std::string_view old_file, std::string_view new_file) {
     return true;
 }
 
-static std::string get_user_known_hosts_path() {
+std::string get_user_known_hosts_path() {
     return adb_get_android_dir_path() + OS_PATH_SEPARATOR + "adb_known_hosts.pb";
 }
 
@@ -102,7 +102,6 @@ bool load_known_hosts_from_file(const std::string& path, adb::proto::AdbKnownHos
     // Check for file existence.
     struct stat buf;
     if (stat(path.c_str(), &buf) == -1) {
-        LOG(INFO) << "Known hosts file [" << path << "] does not exist...";
         return false;
     }
 
@@ -200,7 +199,7 @@ void adb_wifi_pair_device(const std::string& host, const std::string& password,
     auto priv_key = adb_auth_get_user_privkey();
     auto x509_cert = GenerateX509Certificate(priv_key.get());
     if (!x509_cert) {
-        LOG(ERROR) << "Unable to create X509 certificate for pairing";
+        response = "Unable to create X509 certificate for pairing";
         return;
     }
     auto cert_str = X509ToPEMString(x509_cert.get());
@@ -226,10 +225,9 @@ void adb_wifi_pair_device(const std::string& host, const std::string& password,
 
     PairingResultWaiter waiter;
     std::unique_lock<std::mutex> lock(waiter.mutex_);
-    if (!client->Start(mdns_info.has_value()
-                               ? android::base::StringPrintf("%s:%d", mdns_info->addr.c_str(),
-                                                             mdns_info->port)
-                               : host,
+    if (!client->Start(mdns_info.has_value() ? std::format("{}:{}", mdns_info->v4_address_string(),
+                                                           mdns_info->port)
+                                             : host,
                        waiter.OnResult, &waiter)) {
         response = "Failed: Unable to start pairing client.";
         return;

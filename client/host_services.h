@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,18 +17,7 @@
 #pragma once
 
 #include <string>
-#include <string_view>
 
-// secure dex metadata, for cloud compilation
-constexpr std::string_view kSdmExtension = ".sdm";
-// dex metadata, for cloud profile and cloud verification
-constexpr std::string_view kDmExtension = ".dm";
-
-int install_app(int argc, const char** argv);
-int install_multiple_app(int argc, const char** argv);
-int install_multi_package(int argc, const char** argv);
-int uninstall_app(int argc, const char** argv);
-
-int delete_device_file(const std::string& filename);
-int delete_host_file(const std::string& filename);
-
+namespace HostServices {
+constexpr const char* kTrackMdnsServices = "track-mdns-services";
+}

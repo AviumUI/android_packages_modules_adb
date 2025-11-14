@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "adb_wifi.h"
+#include "adbd_wifi.h"
 
 #include <unistd.h>
 #include <optional>
@@ -23,6 +23,7 @@
 #include <android-base/properties.h>
 
 #include "adb.h"
+#include "adbd_wifi.h"
 #include "daemon/mdns.h"
 #include "sysdeps.h"
 #include "transport.h"
@@ -41,10 +42,6 @@ static void adb_disconnected(void* unused, atransport* t) {
     CHECK(t->auth_id.has_value());
     adbd_auth_tls_device_disconnected(auth_ctx, kAdbTransportTypeWifi, t->auth_id.value());
 }
-
-// TODO(b/31559095): need bionic host so that we can use 'prop_info' returned
-// from WaitForProperty
-#if defined(__ANDROID__)
 
 class TlsServer {
   public:
@@ -146,44 +143,13 @@ void TlsServer::OnFdEvent(int fd, unsigned ev) {
 }
 
 TlsServer* sTlsServer = nullptr;
-const char kWifiPortProp[] = "service.adb.tls.port";
 
 const char kWifiEnabledProp[] = "persist.adb.tls_server.enable";
 
-static void enable_wifi_debugging() {
-    start_mdnsd();
-
-    if (sTlsServer != nullptr) {
-        delete sTlsServer;
-    }
-    sTlsServer = new TlsServer(0);
-    if (!sTlsServer->Start()) {
-        LOG(ERROR) << "Failed to start TlsServer";
-        delete sTlsServer;
-        sTlsServer = nullptr;
-        return;
-    }
-
-    // Start mdns connect service for discovery
-    register_adb_secure_connect_service(sTlsServer->port());
-    LOG(INFO) << "adb wifi started on port " << sTlsServer->port();
-    SetProperty(kWifiPortProp, std::to_string(sTlsServer->port()));
-}
-
-static void disable_wifi_debugging() {
-    if (sTlsServer != nullptr) {
-        delete sTlsServer;
-        sTlsServer = nullptr;
-    }
-    if (is_adb_secure_connect_service_registered()) {
-        unregister_adb_secure_connect_service();
-    }
-    kick_all_tcp_tls_transports();
-    LOG(INFO) << "adb wifi stopped";
-    SetProperty(kWifiPortProp, "");
-}
-
-// Watches for the #kWifiEnabledProp property to toggle the TlsServer
+// TODO(b/31559095): need bionic host so that we can use 'prop_info' returned
+// from WaitForProperty
+#if defined(__ANDROID__)
+// Pre API 37 control ADB Wifi TLSServer by toggling kWifiEnabledProp property
 static void start_wifi_enabled_observer() {
     std::thread([]() {
         bool wifi_enabled = false;
@@ -206,6 +172,44 @@ static void start_wifi_enabled_observer() {
 #endif  //__ANDROID__
 
 }  // namespace
+
+static void adbd_send_tls_server_port(uint16_t port) {
+    LOG(INFO) << "Sending TLS port to framework via system property '" << port << "'";
+    SetProperty("service.adb.tls.port", std::to_string(port));
+}
+
+void enable_wifi_debugging() {
+    start_mdnsd();
+
+    if (sTlsServer != nullptr) {
+        delete sTlsServer;
+    }
+    sTlsServer = new TlsServer(0);
+    if (!sTlsServer->Start()) {
+        LOG(ERROR) << "Failed to start TlsServer";
+        delete sTlsServer;
+        sTlsServer = nullptr;
+        return;
+    }
+
+    // Start mdns connect service for discovery
+    register_adb_secure_connect_service(sTlsServer->port());
+    LOG(INFO) << "adb wifi started on port " << sTlsServer->port();
+    adbd_send_tls_server_port(sTlsServer->port());
+}
+
+void disable_wifi_debugging() {
+    if (sTlsServer != nullptr) {
+        delete sTlsServer;
+        sTlsServer = nullptr;
+    }
+    if (is_adb_secure_connect_service_registered()) {
+        unregister_adb_secure_connect_service();
+    }
+    kick_all_tcp_tls_transports();
+    LOG(INFO) << "adb wifi stopped";
+    adbd_send_tls_server_port(0);
+}
 
 void adbd_wifi_init(AdbdAuthContext* ctx) {
     auth_ctx = ctx;

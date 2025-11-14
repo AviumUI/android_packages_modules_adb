@@ -17,26 +17,64 @@
 #pragma once
 
 #include <string>
+#include <tuple>
 
 #include <discovery/dnssd/public/dns_sd_instance_endpoint.h>
 #include <platform/base/ip_address.h>
+
+#include <unordered_set>
 
 #include "client/mdns_utils.h"
 
 namespace mdns {
 
+struct IPAddressHasher {
+    size_t operator()(const openscreen::IPAddress& ip_address) const {
+        return std::hash<std::string_view>{}(
+                {reinterpret_cast<const char*>(ip_address.bytes()), 16});
+    }
+};
+
+struct IPAddressEqual {
+    bool operator()(const openscreen::IPAddress& lhs, const openscreen::IPAddress& rhs) const {
+        return lhs == rhs;
+    }
+};
+
 struct ServiceInfo {
-    std::string instance_name;
-    std::string service_name;
-    openscreen::IPAddress v4_address;
-    openscreen::IPAddress v6_address;
+    std::string instance;
+    std::string service;
+    std::optional<openscreen::IPAddress> v4_address;
+    std::unordered_set<openscreen::IPAddress, IPAddressHasher, IPAddressEqual> v6_addresses;
     uint16_t port;
 
     std::string v4_address_string() const;
-    std::string v6_address_string() const;
+
+    // Store keys/values from TXT resource record
+    std::unordered_map<std::string, std::string> attributes;
 };  // ServiceInfo
+
+inline std::string to_string(const openscreen::IPAddress& ip_address) {
+    std::stringstream ss;
+    ss << ip_address;
+    return ss.str();
+}
+
+inline std::ostream& operator<<(std::ostream& os, const ServiceInfo& service_info) {
+    os << "Instance: " << service_info.instance << ", Service: " << service_info.service
+       << ", Port: " << service_info.port;
+    if (service_info.v4_address) {
+        os << ", IPv4: " << service_info.v4_address.value();
+    }
+    for (auto& address : service_info.v6_addresses) {
+        os << ", IPv6: " << address;
+    }
+    return os;
+}
 
 openscreen::ErrorOr<ServiceInfo> DnsSdInstanceEndpointToServiceInfo(
         const openscreen::discovery::DnsSdInstanceEndpoint& endpoint);
+
+std::tuple<bool, std::string, std::string> ParseTxtKeyValue(const std::string& kv);
 
 }  // namespace mdns

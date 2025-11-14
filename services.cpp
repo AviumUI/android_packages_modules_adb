@@ -35,11 +35,18 @@
 #include "adb_io.h"
 #include "adb_unique_fd.h"
 #include "adb_utils.h"
-#include "adb_wifi.h"
+#if ADB_HOST
+#include "client/adb_wifi.h"
+#endif
 #include "services.h"
 #include "socket_spec.h"
 #include "sysdeps.h"
 #include "transport.h"
+
+#if ADB_HOST
+#include "client/host_services.h"
+#include "client/mdns_tracker.h"
+#endif
 
 namespace {
 
@@ -149,6 +156,7 @@ static void connect_service(unique_fd fd, std::string host) {
 static void pair_service(unique_fd fd, std::string host, std::string password) {
     std::string response;
     adb_wifi_pair_device(host, password, response);
+    VLOG(MDNS) << "Pairing response: '" << response << "'";
     if (android::base::StartsWith(response, "Successful")) {
         SendProtocolString(fd.get(), response);
     } else {
@@ -278,6 +286,8 @@ asocket* host_service_to_socket(std::string_view name, std::string_view serial,
         unique_fd fd = create_service_thread(
                 "pair", std::bind(pair_service, std::placeholders::_1, host, password));
         return create_local_socket(std::move(fd));
+    } else if (android::base::ConsumePrefix(&name, HostServices::kTrackMdnsServices)) {
+        return create_mdns_tracker();
     }
     return nullptr;
 }

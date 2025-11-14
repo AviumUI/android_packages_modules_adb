@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,18 +16,13 @@
 
 #pragma once
 
-#include <optional>
-#include <string>
-#include <vector>
+#include "adb_auth.h"
+#include "transport.h"
 
-#include "sysdeps.h"
+void enable_wifi_debugging();
+void disable_wifi_debugging();
 
-namespace incremental {
+struct AdbdAuthContext;
 
-using Files = std::vector<std::string>;
-using Args = std::vector<std::string_view>;
-
-bool can_install(const Files& files);
-std::optional<Process> install(const Files& files, const Args& passthrough_args, bool silent);
-
-}  // namespace incremental
+void adbd_wifi_init(AdbdAuthContext* ctx);
+void adbd_wifi_secure_connect(atransport* t);

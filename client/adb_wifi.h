@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018 The Android Open Source Project
+ * Copyright (C) 2019 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,19 +16,11 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
-#include <string_view>
 
-// secure dex metadata, for cloud compilation
-constexpr std::string_view kSdmExtension = ".sdm";
-// dex metadata, for cloud profile and cloud verification
-constexpr std::string_view kDmExtension = ".dm";
+#include "adb.h"
 
-int install_app(int argc, const char** argv);
-int install_multiple_app(int argc, const char** argv);
-int install_multi_package(int argc, const char** argv);
-int uninstall_app(int argc, const char** argv);
-
-int delete_device_file(const std::string& filename);
-int delete_host_file(const std::string& filename);
-
+void adb_wifi_pair_device(const std::string& host, const std::string& password,
+                          std::string& response);
+bool adb_wifi_is_known_host(const std::string& host);

@@ -42,6 +42,12 @@ LibUsbConnection::~LibUsbConnection() {
 
 void LibUsbConnection::OnError(const std::string& reason) {
     std::call_once(this->error_flag_, [this, reason]() {
+        // Clears halt condition for endpoints when an error is encountered. This logic was moved
+        // here from LibUsbDevice::ClaimInterface() where calling it as part of the open device
+        // flow would cause some devices to enter a state where communication was broken. See issue
+        // https://issuetracker.google.com/issues/404741058
+        device_->ClearEndpoints();
+
         // When a Windows machine goes to sleep it powers off all its USB host controllers to save
         // energy. When the machine awakens, it powers them up which causes all the endpoints
         // to be closed (which generates a read/write failure leading to us Close()ing the device).
@@ -87,28 +93,14 @@ bool LibUsbConnection::Start() {
 
 void LibUsbConnection::StartReadThread() {
     read_thread_ = std::thread([this]() {
-        LOG(INFO) << Serial() << ": read thread spawning";
+        VLOG(USB) << Serial() << ": read thread spawning";
         while (true) {
             auto packet = std::make_unique<apacket>();
             if (!device_->Read(packet.get())) {
                 PLOG(INFO) << Serial() << ": read failed";
                 break;
             }
-
-            bool got_stls_cmd = false;
-            if (packet->msg.command == A_STLS) {
-                got_stls_cmd = true;
-            }
-
             transport_->HandleRead(std::move(packet));
-
-            // If we received the STLS packet, we are about to perform the TLS
-            // handshake. So this read thread must stop and resume after the
-            // handshake completes otherwise this will interfere in the process.
-            if (got_stls_cmd) {
-                LOG(INFO) << Serial() << ": Received STLS packet. Stopping read thread.";
-                break;
-            }
         }
         HandleStop("read thread stopped");
     });
@@ -116,7 +108,7 @@ void LibUsbConnection::StartReadThread() {
 
 void LibUsbConnection::StartWriteThread() {
     write_thread_ = std::thread([this]() {
-        LOG(INFO) << Serial() << ": write thread spawning";
+        VLOG(USB) << Serial() << ": write thread spawning";
         while (true) {
             std::unique_lock<std::mutex> lock(mutex_);
             ScopedLockAssertion assume_locked(mutex_);
@@ -141,7 +133,7 @@ void LibUsbConnection::StartWriteThread() {
 }
 
 bool LibUsbConnection::DoTlsHandshake(RSA* key, std::string* auth_key) {
-    LOG(WARNING) << "TlsHandshake is not supported by libusb backen";
+    LOG(WARNING) << "TlsHandshake is not supported by libusb backend";
     return false;
 }
 
